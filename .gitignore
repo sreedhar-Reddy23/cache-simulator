@@ -1,0 +1,30 @@
+# Compiled binaries
+cache_simulator
+*.o
+*.exe
+
+# Trace files (large data files)
+*.txt
+!README.txt
+
+# Results and output files
+*.csv
+*.png
+*.pdf
+
+# System files
+*.Zone.Identifier
+.DS_Store
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+temp_*
+*.tmp
+*.log
