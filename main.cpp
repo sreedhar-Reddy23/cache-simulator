@@ -5,6 +5,7 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -54,6 +55,39 @@ public:
     // Set next level in memory hierarchy
     void set_next_level(Cache* next) {
         next_level = next;
+    }
+    
+    // Calculate cache area based on configuration (simplified model)
+    double calculate_area() const {
+        if (!is_enabled()) return 0.0;
+        
+        // Simplified area model based on CACTI-like estimates
+        // Area factors: tag array + data array + control logic
+        
+        // Basic area per bit (nm² per bit, converted to mm²)
+        const double area_per_bit_nm2 = 0.05;  // 45nm technology node
+        const double nm2_to_mm2 = 1e-12;
+        
+        // Calculate tag bits per block
+        int tag_bits = 32 - static_cast<int>(log2(block_size)) - static_cast<int>(log2(num_sets));
+        
+        // Data array area
+        double data_area = num_blocks * block_size * 8 * area_per_bit_nm2 * nm2_to_mm2;
+        
+        // Tag array area (including valid and dirty bits)
+        double tag_area = num_blocks * (tag_bits + 2) * area_per_bit_nm2 * nm2_to_mm2;
+        
+        // Control logic overhead (proportional to associativity)
+        double control_area = 0.1 * (data_area + tag_area) * (1.0 + 0.1 * associativity);
+        
+        return data_area + tag_area + control_area;
+    }
+    
+    // Set timing parameters for AAT calculations
+    void set_timing_parameters(int hit_cycles, int miss_penalty_cycles) {
+        stats.hit_time = hit_cycles;
+        stats.miss_penalty = miss_penalty_cycles;
+        stats.area_mm2 = calculate_area();
     }
     
     // Getter methods
@@ -272,8 +306,14 @@ public:
         unsigned long write_misses;
         unsigned long writebacks;
         
+        // AAT (Average Access Time) parameters
+        int hit_time;           // Cache hit time in cycles
+        int miss_penalty;       // Miss penalty in cycles
+        double area_mm2;        // Cache area in mm²
+        
         CacheStats() : reads(0), writes(0), read_hits(0), write_hits(0), 
-                       read_misses(0), write_misses(0), writebacks(0) {}
+                       read_misses(0), write_misses(0), writebacks(0),
+                       hit_time(1), miss_penalty(100), area_mm2(0.0) {}
                        
         double get_read_miss_rate() const {
             return reads > 0 ? (double)read_misses / reads : 0.0;
@@ -287,6 +327,35 @@ public:
             unsigned long total = reads + writes;
             unsigned long total_misses = read_misses + write_misses;
             return total > 0 ? (double)total_misses / total : 0.0;
+        }
+        
+        // Calculate Average Access Time (AAT)
+        double get_aat() const {
+            double miss_rate = get_overall_miss_rate();
+            return hit_time + (miss_rate * miss_penalty);
+        }
+        
+        // Calculate effective access time including write considerations
+        double get_effective_aat() const {
+            if (reads + writes == 0) return 0.0;
+            
+            double read_miss_rate = get_read_miss_rate();
+            double write_miss_rate = get_write_miss_rate();
+            double read_ratio = (double)reads / (reads + writes);
+            double write_ratio = (double)writes / (reads + writes);
+            
+            // Weighted AAT considering read/write mix
+            double read_aat = hit_time + (read_miss_rate * miss_penalty);
+            double write_aat = hit_time + (write_miss_rate * miss_penalty);
+            
+            return (read_ratio * read_aat) + (write_ratio * write_aat);
+        }
+        
+        // Performance per area metric
+        double get_performance_per_area() const {
+            if (area_mm2 <= 0.0) return 0.0;
+            double aat = get_aat();
+            return aat > 0.0 ? (1.0 / aat) / area_mm2 : 0.0;
         }
     };
     
@@ -538,8 +607,291 @@ bool parse_trace_line(const std::string& line, TraceEntry& entry) {
     return true;
 }
 
+// Performance Analysis Class for comprehensive cache behavior evaluation
+class PerformanceAnalyzer {
+private:
+    struct AccessPattern {
+        std::vector<unsigned long> addresses;
+        std::vector<char> operations;
+        std::vector<double> timestamps;
+        
+        void add_access(unsigned long addr, char op, double time = 0.0) {
+            addresses.push_back(addr);
+            operations.push_back(op);
+            timestamps.push_back(time);
+        }
+        
+        void clear() {
+            addresses.clear();
+            operations.clear();
+            timestamps.clear();
+        }
+    };
+    
+    AccessPattern pattern;
+    
+public:
+    // Analyze spatial locality in access patterns
+    struct SpatialLocalityStats {
+        double sequential_ratio;        // Ratio of sequential accesses
+        double stride_pattern_ratio;    // Ratio of regular stride patterns
+        double random_access_ratio;     // Ratio of random accesses
+        double avg_stride;              // Average stride distance
+        int max_sequential_length;     // Longest sequential access sequence
+        
+        SpatialLocalityStats() : sequential_ratio(0.0), stride_pattern_ratio(0.0), 
+                               random_access_ratio(0.0), avg_stride(0.0), max_sequential_length(0) {}
+    };
+    
+    // Analyze temporal locality
+    struct TemporalLocalityStats {
+        double reuse_distance_avg;      // Average reuse distance
+        double hit_rate_temporal;       // Hit rate due to temporal locality
+        int unique_addresses;           // Number of unique addresses accessed
+        double working_set_size;        // Estimated working set size
+        
+        TemporalLocalityStats() : reuse_distance_avg(0.0), hit_rate_temporal(0.0), 
+                                unique_addresses(0), working_set_size(0.0) {}
+    };
+    
+    // Cache pollution analysis
+    struct PollutionStats {
+        double pollution_rate;          // Rate of cache pollution
+        double useful_data_ratio;       // Ratio of useful vs. polluting data
+        int conflict_misses;            // Estimated conflict misses
+        int capacity_misses;            // Estimated capacity misses
+        
+        PollutionStats() : pollution_rate(0.0), useful_data_ratio(0.0), 
+                         conflict_misses(0), capacity_misses(0) {}
+    };
+    
+    // Record access pattern for analysis
+    void record_access(unsigned long address, char operation, double timestamp = 0.0) {
+        pattern.add_access(address, operation, timestamp);
+    }
+    
+    // Analyze spatial locality
+    SpatialLocalityStats analyze_spatial_locality(int block_size = 32) const {
+        SpatialLocalityStats stats;
+        
+        if (pattern.addresses.size() < 2) return stats;
+        
+        int sequential_count = 0;
+        int stride_count = 0;
+        int max_seq_length = 1;
+        int current_seq_length = 1;
+        long total_stride = 0;
+        
+        // Analyze access patterns
+        for (size_t i = 1; i < pattern.addresses.size(); i++) {
+            long stride = static_cast<long>(pattern.addresses[i]) - static_cast<long>(pattern.addresses[i-1]);
+            total_stride += abs(stride);
+            
+            // Check for sequential access (within same block or next block)
+            if (abs(stride) <= block_size) {
+                sequential_count++;
+                current_seq_length++;
+            } else {
+                max_seq_length = std::max(max_seq_length, current_seq_length);
+                current_seq_length = 1;
+            }
+            
+            // Check for regular stride patterns
+            if (i >= 2) {
+                long prev_stride = static_cast<long>(pattern.addresses[i-1]) - static_cast<long>(pattern.addresses[i-2]);
+                if (stride == prev_stride && stride != 0) {
+                    stride_count++;
+                }
+            }
+        }
+        
+        max_seq_length = std::max(max_seq_length, current_seq_length);
+        
+        int total_accesses = pattern.addresses.size() - 1;
+        stats.sequential_ratio = (double)sequential_count / total_accesses;
+        stats.stride_pattern_ratio = (double)stride_count / std::max(total_accesses - 1, 1);
+        stats.random_access_ratio = 1.0 - stats.sequential_ratio - stats.stride_pattern_ratio;
+        stats.avg_stride = (double)total_stride / total_accesses;
+        stats.max_sequential_length = max_seq_length;
+        
+        return stats;
+    }
+    
+    // Analyze temporal locality
+    TemporalLocalityStats analyze_temporal_locality() const {
+        TemporalLocalityStats stats;
+        
+        if (pattern.addresses.empty()) return stats;
+        
+        std::unordered_map<unsigned long, std::vector<size_t>> address_positions;
+        std::unordered_map<unsigned long, size_t> last_access;
+        
+        // Record positions of each address
+        for (size_t i = 0; i < pattern.addresses.size(); i++) {
+            address_positions[pattern.addresses[i]].push_back(i);
+        }
+        
+        stats.unique_addresses = address_positions.size();
+        
+        // Calculate reuse distances
+        double total_reuse_distance = 0.0;
+        int reuse_count = 0;
+        
+        for (const auto& addr_positions : address_positions) {
+            const auto& positions = addr_positions.second;
+            for (size_t i = 1; i < positions.size(); i++) {
+                total_reuse_distance += positions[i] - positions[i-1];
+                reuse_count++;
+            }
+        }
+        
+        if (reuse_count > 0) {
+            stats.reuse_distance_avg = total_reuse_distance / reuse_count;
+        }
+        
+        // Estimate working set size (unique addresses in recent window)
+        const size_t window_size = std::min((size_t)1000, pattern.addresses.size());
+        std::unordered_set<unsigned long> recent_addresses;
+        
+        for (size_t i = pattern.addresses.size() - window_size; i < pattern.addresses.size(); i++) {
+            recent_addresses.insert(pattern.addresses[i]);
+        }
+        
+        stats.working_set_size = recent_addresses.size();
+        
+        return stats;
+    }
+    
+    // Analyze cache pollution effects
+    PollutionStats analyze_cache_pollution(const Cache& cache) const {
+        PollutionStats stats;
+        
+        if (pattern.addresses.empty()) return stats;
+        
+        // Simulate cache behavior to identify pollution
+        int block_size = cache.get_block_size();
+        int num_sets = cache.get_num_sets();
+        int associativity = cache.get_associativity();
+        
+        // Simple pollution analysis based on set conflicts
+        std::unordered_map<int, std::vector<unsigned long>> set_accesses;
+        
+        for (unsigned long addr : pattern.addresses) {
+            unsigned long block_addr = addr / block_size;
+            int set_index = block_addr % num_sets;
+            set_accesses[set_index].push_back(block_addr);
+        }
+        
+        int total_conflicts = 0;
+        int total_accesses = 0;
+        
+        for (const auto& set_access : set_accesses) {
+            const auto& accesses = set_access.second;
+            total_accesses += accesses.size();
+            
+            // Count potential conflicts (more unique blocks than associativity)
+            std::unordered_set<unsigned long> unique_blocks(accesses.begin(), accesses.end());
+            if (unique_blocks.size() > (size_t)associativity) {
+                total_conflicts += accesses.size() - associativity;
+            }
+        }
+        
+        if (total_accesses > 0) {
+            stats.pollution_rate = (double)total_conflicts / total_accesses;
+            stats.useful_data_ratio = 1.0 - stats.pollution_rate;
+        }
+        
+        stats.conflict_misses = total_conflicts;
+        
+        return stats;
+    }
+    
+    // Generate comprehensive performance report
+    void generate_performance_report(const Cache& l1_cache, const Cache& l2_cache, 
+                                   const std::string& trace_name) const {
+        
+        std::cout << "\n" << std::string(80, '=') << std::endl;
+        std::cout << "COMPREHENSIVE PERFORMANCE ANALYSIS REPORT" << std::endl;
+        std::cout << std::string(80, '=') << std::endl;
+        std::cout << "Trace: " << trace_name << std::endl;
+        std::cout << "Total Accesses: " << pattern.addresses.size() << std::endl;
+        std::cout << std::endl;
+        
+        // Cache Configuration Analysis
+        std::cout << "CACHE CONFIGURATION ANALYSIS" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        
+        const auto& l1_stats = l1_cache.get_stats();
+        std::cout << "L1 Cache:" << std::endl;
+        std::cout << "  Size: " << l1_cache.get_size() << " bytes" << std::endl;
+        std::cout << "  Associativity: " << l1_cache.get_associativity() << "-way" << std::endl;
+        std::cout << "  Block Size: " << l1_cache.get_block_size() << " bytes" << std::endl;
+        std::cout << "  Area: " << std::fixed << std::setprecision(4) << l1_stats.area_mm2 << " mm²" << std::endl;
+        std::cout << "  AAT: " << std::fixed << std::setprecision(2) << l1_stats.get_aat() << " cycles" << std::endl;
+        std::cout << "  Performance/Area: " << std::scientific << std::setprecision(2) 
+                  << l1_stats.get_performance_per_area() << " (1/cycles)/mm²" << std::endl;
+        
+        if (l2_cache.is_enabled()) {
+            const auto& l2_stats = l2_cache.get_stats();
+            std::cout << "\nL2 Cache:" << std::endl;
+            std::cout << "  Size: " << l2_cache.get_size() << " bytes" << std::endl;
+            std::cout << "  Associativity: " << l2_cache.get_associativity() << "-way" << std::endl;
+            std::cout << "  Area: " << std::fixed << std::setprecision(4) << l2_stats.area_mm2 << " mm²" << std::endl;
+            std::cout << "  AAT: " << std::fixed << std::setprecision(2) << l2_stats.get_aat() << " cycles" << std::endl;
+        }
+        
+        // Spatial Locality Analysis
+        auto spatial_stats = analyze_spatial_locality(l1_cache.get_block_size());
+        std::cout << "\nSPATIAL LOCALITY ANALYSIS" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        std::cout << "Sequential Access Ratio: " << std::fixed << std::setprecision(3) 
+                  << spatial_stats.sequential_ratio << std::endl;
+        std::cout << "Stride Pattern Ratio: " << spatial_stats.stride_pattern_ratio << std::endl;
+        std::cout << "Random Access Ratio: " << spatial_stats.random_access_ratio << std::endl;
+        std::cout << "Average Stride: " << std::fixed << std::setprecision(1) 
+                  << spatial_stats.avg_stride << " bytes" << std::endl;
+        std::cout << "Max Sequential Length: " << spatial_stats.max_sequential_length << " accesses" << std::endl;
+        
+        // Temporal Locality Analysis
+        auto temporal_stats = analyze_temporal_locality();
+        std::cout << "\nTEMPORAL LOCALITY ANALYSIS" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        std::cout << "Unique Addresses: " << temporal_stats.unique_addresses << std::endl;
+        std::cout << "Working Set Size: " << temporal_stats.working_set_size << " addresses" << std::endl;
+        std::cout << "Average Reuse Distance: " << std::fixed << std::setprecision(1) 
+                  << temporal_stats.reuse_distance_avg << " accesses" << std::endl;
+        
+        // Cache Pollution Analysis
+        auto pollution_stats = analyze_cache_pollution(l1_cache);
+        std::cout << "\nCACHE POLLUTION ANALYSIS" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        std::cout << "Pollution Rate: " << std::fixed << std::setprecision(3) 
+                  << pollution_stats.pollution_rate << std::endl;
+        std::cout << "Useful Data Ratio: " << pollution_stats.useful_data_ratio << std::endl;
+        std::cout << "Estimated Conflict Misses: " << pollution_stats.conflict_misses << std::endl;
+        
+        // Performance Trade-offs
+        std::cout << "\nPERFORMANCE TRADE-OFFS" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+        std::cout << "Miss Rate vs. Area Trade-off:" << std::endl;
+        std::cout << "  Miss Rate: " << std::fixed << std::setprecision(3) 
+                  << l1_stats.get_overall_miss_rate() << std::endl;
+        std::cout << "  Area Cost: " << l1_stats.area_mm2 << " mm²" << std::endl;
+        std::cout << "  Performance Efficiency: " << std::scientific << std::setprecision(2) 
+                  << (1.0 - l1_stats.get_overall_miss_rate()) / l1_stats.area_mm2 << " hit_rate/mm²" << std::endl;
+        
+        std::cout << std::endl;
+    }
+    
+    // Clear recorded access patterns
+    void clear() {
+        pattern.clear();
+    }
+};
+
 // Process trace file and simulate cache accesses
-bool process_trace_file(const std::string& filename, Cache& l1_cache, Cache& l2_cache, bool verbose = false) {
+bool process_trace_file(const std::string& filename, Cache& l1_cache, Cache& l2_cache, 
+                       PerformanceAnalyzer& analyzer, bool verbose = false) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: Cannot open trace file '" << filename << "'" << std::endl;
@@ -578,6 +930,9 @@ bool process_trace_file(const std::string& filename, Cache& l1_cache, Cache& l2_
         // Process the cache access
         bool is_write = (entry.operation == 'w');
         bool l1_hit = l1_cache.access_with_stats(entry.address, is_write);
+        
+        // Record access for performance analysis
+        analyzer.record_access(entry.address, entry.operation, total_accesses);
         
         total_accesses++;
         
@@ -660,6 +1015,27 @@ void print_simulation_results(const Cache& l1_cache, const Cache& l2_cache) {
     }
     
     std::cout << std::endl;
+    
+    // Additional performance metrics
+    std::cout << "===== Performance Metrics =====" << std::endl;
+    std::cout << "L1 Average Access Time:       " << std::fixed << std::setprecision(2) 
+              << l1_stats.get_aat() << " cycles" << std::endl;
+    std::cout << "L1 Cache Area:                " << std::fixed << std::setprecision(4) 
+              << l1_stats.area_mm2 << " mm²" << std::endl;
+    std::cout << "L1 Performance/Area:          " << std::scientific << std::setprecision(2) 
+              << l1_stats.get_performance_per_area() << " (1/cycles)/mm²" << std::endl;
+    
+    if (l2_cache.is_enabled()) {
+        const auto& l2_stats = l2_cache.get_stats();
+        std::cout << "L2 Average Access Time:       " << std::fixed << std::setprecision(2) 
+                  << l2_stats.get_aat() << " cycles" << std::endl;
+        std::cout << "L2 Cache Area:                " << std::fixed << std::setprecision(4) 
+                  << l2_stats.area_mm2 << " mm²" << std::endl;
+        std::cout << "Total Cache Area:             " << std::fixed << std::setprecision(4) 
+                  << (l1_stats.area_mm2 + l2_stats.area_mm2) << " mm²" << std::endl;
+    }
+    
+    std::cout << std::endl;
 }
 
 // Helper function to create a sample trace file for testing
@@ -708,7 +1084,7 @@ int main(int argc, char* argv[]) {
     int pref_m = std::atoi(argv[7]);
     std::string trace_file = argv[8];
 
-    // Create cache structures
+    // Create cache structures with timing parameters
     Cache l2_cache(blocksize, l2_size, l2_assoc);  // L2 cache (next level = memory)
     Cache l1_cache(blocksize, l1_size, l1_assoc);  // L1 cache
     
@@ -716,9 +1092,16 @@ int main(int argc, char* argv[]) {
     if (l2_cache.is_enabled()) {
         l1_cache.set_next_level(&l2_cache);
         // L2's next level is memory (nullptr by default)
+        l2_cache.set_timing_parameters(10, 100);  // L2: 10 cycle hit, 100 cycle miss penalty
     } else {
         // No L2 cache, L1 goes directly to memory (nullptr by default)
     }
+    
+    // Set L1 timing parameters
+    l1_cache.set_timing_parameters(1, l2_cache.is_enabled() ? 10 : 100);  // L1: 1 cycle hit, miss penalty depends on L2
+    
+    // Create performance analyzer
+    PerformanceAnalyzer analyzer;
 
     // Validate arguments using the cache validation methods
     if (!l1_cache.is_valid_configuration()) {
@@ -758,7 +1141,7 @@ int main(int argc, char* argv[]) {
 
     // Process the trace file
     std::cout << "Starting cache simulation..." << std::endl;
-    if (!process_trace_file(trace_file, l1_cache, l2_cache)) {
+    if (!process_trace_file(trace_file, l1_cache, l2_cache, analyzer)) {
         std::cerr << "Error: Failed to process trace file" << std::endl;
         return 1;
     }
@@ -773,6 +1156,9 @@ int main(int argc, char* argv[]) {
     
     // Print simulation results in required format
     print_simulation_results(l1_cache, l2_cache);
+    
+    // Generate comprehensive performance analysis report
+    analyzer.generate_performance_report(l1_cache, l2_cache, trace_file);
 
     return 0;
 }
