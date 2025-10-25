@@ -10,6 +10,11 @@ A configurable cache memory simulator implementing LRU replacement policy and WB
 - **WBWA Write Policy**: Write-Back + Write-Allocate
 - **Two-step Block Allocation**: Prevents inconsistent cache states
 - **Trace File Processing**: Reads memory access traces in `r|w <hex_address>` format
+- **AAT Analysis**: Average Access Time calculations with configurable timing
+- **Area Modeling**: Cache area estimation and performance/area trade-offs
+- **Spatial/Temporal Locality Analysis**: Comprehensive access pattern analysis
+- **Cache Pollution Detection**: Conflict vs capacity miss analysis
+- **Automated Report Generation**: Professional analytical reports with visualizations
 - **Comprehensive Output**: Configuration, cache contents, and detailed statistics
 
 ## Usage
@@ -42,11 +47,13 @@ make
 
 ## Files
 
-- `main.cpp`: Complete cache simulator implementation
+- `main.cpp`: Complete cache simulator with AAT and area analysis
 - `Makefile`: Build configuration
-- `run_experiment.sh`: Automated performance experiments
-- `plot_results_simple.py`: Results visualization
-- `analyze_results.py`: Performance analysis
+- `run_experiment.sh`: Basic miss rate experiments
+- `run_enhanced_experiment.sh`: Comprehensive AAT/area experiments
+- `plot_results_simple.py`: Basic results visualization
+- `generate_analytical_report.py`: Advanced analysis and reporting
+- `analyze_results.py`: Legacy detailed analysis
 
 ## Cache Architecture
 
@@ -57,18 +64,34 @@ make
 
 ## Performance Analysis
 
-The simulator includes scripts for comprehensive performance analysis:
+The simulator includes comprehensive performance analysis capabilities:
 
+### **Basic Experiments**
 ```bash
-# Run cache size vs. associativity experiment
+# Run cache size vs. associativity experiment (miss rate analysis)
 ./run_experiment.sh
 
-# Generate performance plots
+# Generate basic performance plots
 python3 plot_results_simple.py
-
-# Detailed analysis
-python3 analyze_results.py
 ```
+
+### **Enhanced Analysis** 
+```bash
+# Run enhanced experiments (AAT, area, trade-offs)
+./run_enhanced_experiment.sh
+
+# Generate comprehensive analytical reports
+python3 generate_analytical_report.py
+```
+
+### **Analysis Features**
+- **AAT Analysis**: Average Access Time vs cache configuration
+- **Area Modeling**: Cache area estimation and efficiency metrics
+- **Spatial Locality**: Sequential, stride, and random access pattern analysis
+- **Temporal Locality**: Reuse distance and working set analysis
+- **Cache Pollution**: Conflict vs capacity miss detection
+- **Trade-off Analysis**: Performance vs area efficiency curves
+- **Design Recommendations**: Optimal configuration suggestions
 
 ## Output Format
 
@@ -76,6 +99,8 @@ The simulator outputs:
 1. **Configuration**: All cache parameters
 2. **Cache Contents**: Valid blocks (MRU → LRU order)
 3. **Statistics**: Hit/miss rates, memory traffic, and performance metrics
+4. **Performance Metrics**: AAT, cache area, and efficiency ratios
+5. **Comprehensive Analysis**: Spatial/temporal locality and pollution analysis
 
 ## Build Requirements
 
